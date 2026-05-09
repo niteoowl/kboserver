@@ -1,9 +1,8 @@
 {
   "version": 2,
   "rewrites": [
-    {
-      "source": "/api/kbo",
-      "destination": "/api/index.js"
-    }
+    { "source": "/api/kbo", "destination": "/api/index.js" },
+    { "source": "/api/kbo/relay", "destination": "/api/index.js" },
+    { "source": "/api/kbo/rank", "destination": "/api/index.js" }
   ]
 }

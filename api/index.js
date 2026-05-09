@@ -4,62 +4,97 @@ const cors = require('cors');
 const app = express();
 
 app.use(cors());
+app.use(express.json());
 
-function getKSTDateString() {
-  const now = new Date();
-  return now.toLocaleDateString('sv-SE', { timeZone: 'Asia/Seoul' });
-}
+// 네이버 API 차단 방지를 위한 공통 헤더
+const NAVER_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  'Referer': 'https://sports.news.naver.com/kbaseball/index',
+  'Accept': 'application/json, text/plain, */*'
+};
 
+/**
+ * 1. 경기 일정 및 실시간 스코어
+ * GET /api/kbo?date=YYYY-MM-DD
+ */
 app.get('/api/kbo', async (req, res) => {
   try {
-    const targetDate = req.query.date || getKSTDateString();
-    
-    // targetDate에서 연도와 월 추출 (예: 2026-05-12 -> 2026, 05)
-    const [year, month] = targetDate.split('-');
+    // 1. 쿼리 파라미터에서 날짜를 가져옴
+    let targetDate = req.query.date;
 
-    console.log(`[Request] Fetching KBO data for month: ${year}-${month}, target: ${targetDate}`);
-
-    const response = await axios.get('https://api-gw.sports.naver.com/schedule/games', {
-      params: {
-        upperCategoryId: 'kbaseball',
-        category: 'kbo', // KBO 리그로 한정
-        year: year,
-        month: month // 해당 월 전체 데이터를 가져옴
-      },
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        'Referer': 'https://sports.news.naver.com/kbaseball/index',
-        'Accept': 'application/json, text/plain, */*'
-      }
-    });
-
-    // 네이버는 응답 구조가 날짜별로 묶여있을 때가 있습니다. (result.games 또는 result.monthlySchedule)
-    // 모든 게임 리스트를 하나로 합친 후 필터링합니다.
-    let allGames = [];
-    
-    if (response.data.result.games) {
-      allGames = response.data.result.games;
-    } else if (response.data.result.monthlySchedule) {
-      // 월간 일정 구조일 경우 데이터를 평탄화
-      allGames = Object.values(response.data.result.monthlySchedule).flat();
+    // 2. 날짜 파라미터가 없으면 한국 시간(KST) 기준 오늘 날짜 계산
+    if (!targetDate) {
+      const now = new Date();
+      // 서버 환경(보통 UTC)에 관계없이 한국 시간으로 변환 (+9시간)
+      const kstDate = new Date(now.getTime() + (9 * 60 * 60 * 1000));
+      targetDate = kstDate.toISOString().split('T')[0];
     }
 
-    // 요청한 날짜(targetDate)와 일치하는 경기만 필터링
-    const filteredGames = allGames.filter(game => game.gameDate === targetDate);
+    console.log(`[Schedule] Requesting date: ${targetDate}`);
 
-    res.status(200).json({
-      requestedDate: targetDate,
-      totalCount: filteredGames.length,
-      games: filteredGames
+    const response = await axios.get('https://api-gw.sports.naver.com/schedule/games', {
+      params: { 
+        upperCategoryId: 'kbaseball', 
+        date: targetDate 
+      },
+      headers: NAVER_HEADERS
     });
 
-  } catch (error) {
-    console.error('Error:', error.message);
-    res.status(500).json({ 
-      error: "Data Fetching Failed", 
-      message: error.message 
-    });
+    res.json(response.data);
+  } catch (e) {
+    console.error('Schedule API Error:', e.message);
+    res.status(500).json({ error: "데이터를 불러오는 중 오류가 발생했습니다." });
   }
 });
+
+/**
+ * 2. 경기 상세 데이터 (중계 멘트, 주자 정보 등)
+ * GET /api/kbo/relay?gameId=20260510NCLG0
+ */
+app.get('/api/kbo/relay', async (req, res) => {
+  try {
+    const { gameId } = req.query;
+    if (!gameId) {
+      return res.status(400).json({ error: "gameId 파라미터가 필요합니다." });
+    }
+
+    const response = await axios.get(`https://api-gw.sports.naver.com/schedule/games/${gameId}/relay`, {
+      headers: NAVER_HEADERS
+    });
+
+    res.json(response.data);
+  } catch (e) {
+    console.error('Relay API Error:', e.message);
+    res.status(500).json({ error: "상세 중계 데이터를 불러올 수 없습니다." });
+  }
+});
+
+/**
+ * 3. 팀 순위 표
+ * GET /api/kbo/rank?year=2026
+ */
+app.get('/api/kbo/rank', async (req, res) => {
+  try {
+    // 쿼리에 연도가 없으면 현재 서버 연도 사용
+    const year = req.query.year || new Date().getFullYear();
+
+    const response = await axios.get(`https://api-gw.sports.naver.com/statistics/categories/kbo/seasons/${year}/teams`, {
+      headers: NAVER_HEADERS
+    });
+
+    res.json(response.data);
+  } catch (e) {
+    console.error('Rank API Error:', e.message);
+    res.status(500).json({ error: "순위 데이터를 불러올 수 없습니다." });
+  }
+});
+
+// 서버 실행 (독립 실행 시 사용)
+if (require.main === module) {
+  const PORT = process.env.PORT || 3000;
+  app.listen(PORT, () => {
+    console.log(`KBO API Server is running on port ${PORT}`);
+  });
+}
 
 module.exports = app;

@@ -5,10 +5,5 @@
       "source": "/api/kbo",
       "destination": "/api/index.js"
     }
-  ],
-  "functions": {
-    "api/index.js": {
-      "runtime": "@vercel/node@20.x"
-    }
-  }
+  ]
 }

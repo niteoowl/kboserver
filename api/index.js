@@ -5,112 +5,58 @@ const app = express();
 
 app.use(cors());
 
-// 공통 헤더 설정 (네이버 차단 방지 및 데이터 최신화)
-const NAVER_HEADERS = {
-  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-  'Referer': 'https://sports.news.naver.com/kbaseball/index',
-  'Accept': 'application/json, text/plain, */*',
-  'Cache-Control': 'no-cache',
-  'Pragma': 'no-cache'
-};
-
-/**
- * 한국 시간(KST) 날짜 문자열 생성 함수 (YYYY-MM-DD)
- */
-const getKSTDate = () => {
-  return new Intl.DateTimeFormat('ko-KR', {
-    timeZone: 'Asia/Seoul',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit'
-  }).format(new Date()).replace(/\. /g, '-').replace('.', '');
-};
-
-/**
- * 1. 경기 일정 및 실시간 스코어
- * GET /api/kbo?date=YYYY-MM-DD
- */
 app.get('/api/kbo', async (req, res) => {
-  // 브라우저 캐시 방지 헤더 설정
-  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-  
   try {
-    const todayStr = getKSTDate();
+    // 1. 한국 시간(KST) 기준 날짜 생성
+    // 서버(Vercel)의 시간대에 상관없이 한국 시간을 구합니다.
+    const curr = new Date();
+    const utc = curr.getTime() + (curr.getTimezoneOffset() * 60 * 1000);
+    const KR_TIME_DIFF = 9 * 60 * 60 * 1000;
+    const kstDate = new Date(utc + KR_TIME_DIFF);
+    
+    // 네이버 API가 요구하는 형식: YYYY-MM-DD (하이픈 필수)
+    const todayStr = kstDate.toISOString().split('T')[0];
+    
+    // 만약 사용자가 ?date=2026-05-10 처럼 날짜를 보냈다면 그 날짜를 사용하고, 없으면 오늘 날짜 사용
     const targetDate = req.query.date || todayStr;
 
+    console.log('Fetching KBO data for:', targetDate);
+
+    // 2. 네이버 API 호출
     const response = await axios.get('https://api-gw.sports.naver.com/schedule/games', {
-      params: { 
-        upperCategoryId: 'kbaseball', 
-        date: targetDate,
-        _t: Date.now() // API 서버 캐시 방지를 위한 타임스탬프
+      params: {
+        upperCategoryId: 'kbaseball',
+        date: targetDate
       },
-      headers: NAVER_HEADERS,
-      timeout: 5000 // 5초 타임아웃 설정
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Referer': 'https://sports.news.naver.com/kbaseball/index',
+        'Accept': 'application/json, text/plain, */*'
+      },
+      timeout: 5000
     });
 
-    res.json(response.data);
-  } catch (e) {
-    console.error('KBO Schedule Error:', e.message);
-    res.status(500).json({ error: e.message });
-  }
-});
+    // 3. 성공 응답 전송
+    res.status(200).json(response.data);
 
-/**
- * 2. 경기 상세 데이터 (중계 멘트, 주자 정보 등)
- * GET /api/kbo/relay?gameId=20260509NCLG0
- */
-app.get('/api/kbo/relay', async (req, res) => {
-  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  } catch (error) {
+    console.error('Error details:', error.message);
 
-  try {
-    const { gameId } = req.query;
-    if (!gameId) return res.status(400).json({ error: "gameId가 필요합니다." });
-
-    const response = await axios.get(`https://api-gw.sports.naver.com/schedule/games/${gameId}/relay`, {
-      params: { _t: Date.now() },
-      headers: NAVER_HEADERS
-    });
-
-    res.json(response.data);
-  } catch (e) {
-    console.error('KBO Relay Error:', e.message);
-    res.status(500).json({ error: e.message });
-  }
-});
-
-/**
- * 3. 팀 순위 표
- * GET /api/kbo/rank?year=2026
- */
-app.get('/api/kbo/rank', async (req, res) => {
-  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-
-  try {
-    const currentYear = new Intl.DateTimeFormat('ko-KR', {
-      timeZone: 'Asia/Seoul',
-      year: 'numeric'
-    }).format(new Date());
+    if (error.response) {
+      // 네이버 측에서 에러를 뱉은 경우 (400 등)
+      return res.status(error.response.status).json({
+        error: "Naver API Error",
+        status: error.response.status,
+        data: error.response.data
+      });
+    }
     
-    const year = req.query.year || currentYear;
-
-    const response = await axios.get(`https://api-gw.sports.naver.com/statistics/categories/kbo/seasons/${year}/teams`, {
-      params: { _t: Date.now() },
-      headers: NAVER_HEADERS
+    res.status(500).json({
+      error: "Internal Server Error",
+      message: error.message
     });
-
-    res.json(response.data);
-  } catch (e) {
-    console.error('KBO Rank Error:', e.message);
-    res.status(500).json({ error: e.message });
   }
 });
 
-// 모듈로 내보내거나 직접 실행
-const PORT = process.env.PORT || 3000;
-if (require.main === module) {
-  app.listen(PORT, () => {
-    console.log(`KBO API Server running on port ${PORT}`);
-  });
-}
-
+// Vercel 환경을 위한 export
 module.exports = app;
